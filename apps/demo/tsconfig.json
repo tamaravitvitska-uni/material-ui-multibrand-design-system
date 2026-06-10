@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@multibrand/design-system": ["../../packages/design-system/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}
