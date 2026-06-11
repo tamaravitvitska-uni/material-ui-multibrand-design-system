@@ -2,6 +2,9 @@
 
 One Material UI design system, **six brands**, driven entirely by Figma variables.
 
+**Live demo:** https://tamaravitvitska-uni.github.io/material-ui-multibrand-design-system/
+(brand switcher in the top bar — deployed automatically from `main` via GitHub Pages)
+
 | Brand | Product | Font | Primary | Character |
 | --- | --- | --- | --- | --- |
 | **ResumeLeader** | Resume builder | Outfit | `#1f5de2` blue | Modern, calm, professional |

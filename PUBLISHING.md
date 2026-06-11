@@ -25,17 +25,42 @@ Suggested repo settings:
   `multibrand`, `react`
 - Enable branch protection on `main` once collaborators join.
 
-## Demo deployment (optional)
+## Demo deployment — GitHub Pages (configured)
 
-The demo is a static Vite build:
+The demo is published at
+**https://tamaravitvitska-uni.github.io/material-ui-multibrand-design-system/**
+from the `gh-pages` branch (GitHub Pages requires a public repo on the free
+plan). The router picks up the subpath automatically (`BrowserRouter
+basename` from Vite's `BASE_URL` in `apps/demo/src/main.tsx`).
+
+Re-deploy after changes:
 
 ```bash
-npm run build           # outputs apps/demo/dist
+npm run build:tokens
+npm run build -w demo -- --base=/material-ui-multibrand-design-system/
+cp apps/demo/dist/index.html apps/demo/dist/404.html   # SPA fallback
+touch apps/demo/dist/.nojekyll
+TMP=$(mktemp -d) && cp -R apps/demo/dist/. "$TMP" && \
+  git -C "$TMP" init -q -b gh-pages && git -C "$TMP" add -A && \
+  git -C "$TMP" commit -qm "Deploy demo" && \
+  git -C "$TMP" push -f https://github.com/tamaravitvitska-uni/material-ui-multibrand-design-system.git gh-pages && \
+  rm -rf "$TMP"
 ```
 
-Deploy `apps/demo/dist` to Vercel/Netlify/GitHub Pages. For GitHub Pages set
-Vite `base` in `apps/demo/vite.config.ts` to the repo path and add a SPA
-fallback (Pages: copy `index.html` → `404.html`).
+### Optional: automatic deploys on every push
+
+A ready Actions workflow exists locally at
+`.github/workflows/deploy-pages.yml` but pushing workflow files needs the
+`workflow` OAuth scope. To enable auto-deploys:
+
+```bash
+gh auth refresh -h github.com -s workflow      # one-time, opens browser
+gh api -X PUT repos/tamaravitvitska-uni/material-ui-multibrand-design-system/pages -f build_type=workflow
+git add .github/workflows/deploy-pages.yml && git commit -m "Add Pages deploy workflow" && git push
+```
+
+To deploy elsewhere (Vercel/Netlify), build with the default base
+(`npm run build`) and serve `apps/demo/dist`.
 
 ## npm package (optional, when you want apps to consume it)
 
