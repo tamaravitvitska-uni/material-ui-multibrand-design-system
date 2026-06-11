@@ -1,4 +1,3 @@
-import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Grow from '@mui/material/Grow';
 import Stack from '@mui/material/Stack';
@@ -16,17 +15,25 @@ export function convertedName(file: DemoFile): string {
 }
 
 export interface ResultPanelProps {
-  /** 'success' = celebratory moment right after conversion; 'download-ready' adds the result card. */
+  /** 'success' = celebratory moment right after conversion; 'download-ready' adds the result list. */
   mode: 'success' | 'download-ready';
-  file: DemoFile;
-  onDownload: () => void;
+  files: DemoFile[];
+  onDownload: (file: DemoFile) => void;
+  onDownloadAll: () => void;
   onConvertAnother: () => void;
 }
 
 /** Conversion success + download-ready states — mint pill per mode doc §4. */
-export function ResultPanel({ mode, file, onDownload, onConvertAnother }: ResultPanelProps) {
+export function ResultPanel({
+  mode,
+  files,
+  onDownload,
+  onDownloadAll,
+  onConvertAnother,
+}: ResultPanelProps) {
   const theme = useTheme();
   const { tokens } = theme;
+  const single = files.length === 1;
 
   return (
     <Stack spacing={5} sx={{ width: '100%', alignItems: 'center' }}>
@@ -45,7 +52,7 @@ export function ResultPanel({ mode, file, onDownload, onConvertAnother }: Result
         >
           <CheckCircleRounded fontSize="small" color="inherit" />
           <Typography variant="subtitle1" sx={{ fontWeight: 700, color: 'inherit' }}>
-            {RESULT_COPY.successTitle}
+            {RESULT_COPY.successTitle(files.length)}
           </Typography>
         </Stack>
       </Grow>
@@ -56,15 +63,33 @@ export function ResultPanel({ mode, file, onDownload, onConvertAnother }: Result
 
       {mode === 'download-ready' && (
         <Stack spacing={5} sx={{ width: '100%', alignItems: 'center' }}>
-          <Box sx={{ width: '100%' }}>
-            <FileCard
-              file={{ ...file, name: convertedName(file) }}
-              format="doc"
-              caption={`DOCX · ${formatFileSize(Math.round(file.sizeBytes * 0.92))} · ${
-                file.pages
-              } ${file.pages === 1 ? 'page' : 'pages'}`}
-            />
-          </Box>
+          <Stack spacing={3} sx={{ width: '100%' }}>
+            {files.map((file) => (
+              <FileCard
+                key={file.name}
+                file={{ ...file, name: convertedName(file) }}
+                format="doc"
+                caption={`DOCX · ${formatFileSize(Math.round(file.sizeBytes * 0.92))} · ${
+                  file.pages
+                } ${file.pages === 1 ? 'page' : 'pages'}`}
+                status={
+                  // Per-row download for multi-file batches; the single-file
+                  // case gets one big crimson CTA below instead.
+                  !single ? (
+                    <Button
+                      variant="contained"
+                      color="secondary"
+                      size="small"
+                      startIcon={<DownloadRounded />}
+                      onClick={() => onDownload(file)}
+                    >
+                      {RESULT_COPY.downloadRow}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ))}
+          </Stack>
 
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
@@ -78,9 +103,9 @@ export function ResultPanel({ mode, file, onDownload, onConvertAnother }: Result
               color="secondary"
               size="large"
               startIcon={<DownloadRounded />}
-              onClick={onDownload}
+              onClick={single ? () => onDownload(files[0]) : onDownloadAll}
             >
-              {RESULT_COPY.download}
+              {single ? RESULT_COPY.download : RESULT_COPY.downloadAll}
             </Button>
             <Button variant="text" color="primary" size="large" onClick={onConvertAnother}>
               {RESULT_COPY.convertAnother}

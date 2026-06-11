@@ -10,13 +10,18 @@
  *  ("content max-width ~1100px in 1440 frames"). */
 export const CONTENT_MAX_WIDTH = 1100;
 
-/** Upload constraints (mirrors the functional reference: PDF only, 10 MB). */
+/** Upload constraints (mirrors the functional reference: PDF only, 10 MB, 5 files). */
 export const LIMITS = {
   maxSizeBytes: 10 * 1024 * 1024,
   maxSizeLabel: '10 MB',
+  maxFiles: 5,
   acceptedExtensions: ['pdf'],
   acceptAttribute: 'application/pdf,.pdf',
 };
+
+/** Hero/dropzone illustration (Figma "Graphical Design Forma" node 3663-4724),
+ *  BASE_URL-prefixed so it resolves under the GitHub Pages subpath. */
+export const ILLUSTRATION_URL = `${import.meta.env.BASE_URL}demo/pdf-to-word-illustration.svg`;
 
 /** Password accepted by the simulated unlock step. */
 export const DEMO_PASSWORD = 'guru';
@@ -53,11 +58,31 @@ export const HERO = {
   title: 'Convert PDF to Word',
   subtitle:
     'Turn any PDF into an editable Word document in seconds — fonts, tables and images stay exactly where they belong.',
-  dropTitle: 'Drop your PDF here',
+  dropTitle: 'Drop your PDFs here',
   dropHint: 'or',
   chooseFile: 'Choose file',
-  formatsCaption: `Supports PDF · up to ${LIMITS.maxSizeLabel} per file`,
+  formatsCaption: `PDF only · up to ${LIMITS.maxFiles} files · ${LIMITS.maxSizeLabel} each`,
   assurance: 'Files are encrypted in transit and deleted from our servers after 2 hours.',
+};
+
+/** Slim dropzone shown once files are queued (Figma node 49025-3914 keeps
+ *  the drop area available above the file list). */
+export const COMPACT_DROPZONE = {
+  title: 'Drop more files here',
+  caption: HERO.formatsCaption,
+  atCapacity: `Maximum ${LIMITS.maxFiles} files — remove one to add another.`,
+};
+
+export const FILE_LIST = {
+  readyCaption: 'Your document is ready to process',
+  analyzingCaption: 'Checking this file…',
+  passwordCaption: 'Password-protected — unlock to convert',
+  analyzedSummary: (count: number) =>
+    `${count} ${count === 1 ? 'file' : 'files'} analyzed successfully`,
+  analyzingSummary: 'Analyzing your files…',
+  blockedSummary: 'Unlock or remove the locked file to continue',
+  errorsOnlySummary: 'These files can’t be converted — try different ones',
+  convert: 'Convert to Word',
 };
 
 export const TRUST_ITEMS = [
@@ -158,29 +183,20 @@ export const FAQ = {
   ],
 };
 
-export const ERROR_COPY = {
-  'unsupported-format': {
-    title: "That file type isn't supported",
-    body: 'This tool converts PDF files only. Pick a .pdf file and we will take it from there.',
-    primaryAction: 'Choose a PDF file',
-  },
-  'file-too-large': {
-    title: 'This file is too big',
-    body: `Files up to ${LIMITS.maxSizeLabel} are supported on the free plan. Compress the PDF first, or split it into smaller parts.`,
-    primaryAction: 'Choose a smaller file',
-  },
-  'corrupted-file': {
-    title: "We couldn't read this PDF",
-    body: 'The file looks damaged or incomplete. Re-export the PDF from the original document and try again.',
-    primaryAction: 'Choose another file',
-  },
-  'server-error': {
-    title: 'Something went wrong on our side',
-    body: 'The conversion server hiccuped — your file is fine. Give it another try in a moment.',
-    primaryAction: 'Try again',
-    secondaryAction: 'Use another file',
-  },
+/** Inline captions for per-file error rows (UPDF-style red caption). */
+export const ROW_ERROR_COPY = {
+  'unsupported-format': "Sorry, this file type isn't supported — PDF only.",
+  'file-too-large': `Too big for the free plan — files up to ${LIMITS.maxSizeLabel} are supported.`,
+  'corrupted-file': "We couldn't read this PDF — it looks damaged or incomplete.",
 } as const;
+
+/** Batch-level failure (the only full-panel error left). */
+export const SERVER_ERROR_COPY = {
+  title: 'Something went wrong on our side',
+  body: 'The conversion server hiccuped — your files are fine. Give it another try in a moment.',
+  primaryAction: 'Try again',
+  secondaryAction: 'Back to files',
+};
 
 export const PASSWORD_PANEL = {
   title: 'This PDF is password-protected',
@@ -193,18 +209,20 @@ export const PASSWORD_PANEL = {
 };
 
 export const RESULT_COPY = {
-  successTitle: 'Your document is ready!',
+  successTitle: (count: number) =>
+    count === 1 ? 'Your document is ready!' : `Your ${count} documents are ready!`,
   successBody: 'We kept the layout, fonts and images in place.',
   download: 'Download Word file',
-  convertAnother: 'Convert another file',
-  autoDeleteNote: 'This file will be deleted from our servers in 2 hours.',
+  downloadRow: 'Download',
+  downloadAll: 'Download all',
+  convertAnother: 'Convert more files',
+  autoDeleteNote: 'Files will be deleted from our servers in 2 hours.',
 };
 
 export const PROGRESS_COPY = {
-  analyzing: 'Checking your file…',
-  uploading: 'Uploading',
+  uploading: (count: number) => `Uploading ${count} ${count === 1 ? 'file' : 'files'}`,
   cancel: 'Cancel',
-  convertingStages: ['Extracting text', 'Rebuilding layout', 'Polishing the document'],
+  convertingStages: ['Extracting text', 'Rebuilding layout', 'Polishing the documents'],
   convertingNote: 'Almost there — finishing up.',
 };
 

@@ -27,20 +27,26 @@ triggers: `password.pdf` (locked, demo password `guru`), `corrupt.pdf`,
 `fail.pdf` (server error), `huge.pdf` (too large), `slow.pdf`, or any
 non-PDF file. Limits: PDF only, 10 MB.
 
-## Flow states (14)
+## Flow model — persistent dropzone + file queue
 
-default · drag & drop (full-screen overlay) · loading/analyzing · file
-selected · password-protected (with unlock form) · upload progress (with
-cancel) · conversion progress (staged) · conversion success (transient mint
-moment) · download ready · unsupported format · file too large · corrupted
-file · server error (retryable) · empty (post-removal)
+Per the PDFGuru A/B layout (Figma node `49025-3914`), the dropzone stays
+visible after files are added: queued files list below it (up to 5), each
+row carrying its own status — analyzing → green "Your document is ready to
+process", inline password unlock, or an inline error caption (unsupported /
+too large / corrupted). A summary line ("N files analyzed successfully") and
+the violet **Convert to Word** CTA sit under the list; locked or
+still-analyzing rows block conversion, error rows don't (they simply don't
+convert). Batch phases (upload progress with cancel → staged conversion →
+transient mint success → download-ready with per-file Download + Download
+all → retryable server error) swap the card content. The "empty" state is
+the post-removal dropzone. All 14 required states are reachable via the
+inspector or filename triggers.
 
-State logic lives in a pure reducer
-(`upload/conversionMachine.ts`) driven by timers in
-`upload/useConversionFlow.ts`; panels render one-per-phase in
-`upload/UploadWidget.tsx`. "Download Word file" serves a real minimal
-`.docx` (`public/demo/pdf-guru-sample.docx`) renamed to the source file's
-stem.
+State logic lives in a pure reducer (`upload/conversionMachine.ts` — row
+statuses + batch phase) driven by timers in `upload/useConversionFlow.ts`;
+`upload/UploadWidget.tsx` composes the gather screen and batch panels.
+Downloads serve a real minimal `.docx` (`public/demo/pdf-guru-sample.docx`)
+renamed per source file.
 
 ## Design system components used
 
@@ -100,7 +106,13 @@ From Figma node `50648-16354` and `docs/modes/pdfguru.md`:
 3. **Upload card:** white rounded sheet with the **multicolor dashed
    dropzone border** (implemented as an SVG gradient stroke fed by
    `basePalette` tokens), violet bold drop-label, violet formats caption,
-   violet contained Choose file.
+   violet contained Choose file. The dropzone illustration is the official
+   PDF→W artwork from Figma "Graphical Design Forma" node `3663-4724`
+   (exported SVG, background stripped, viewBox tightened —
+   `public/demo/pdf-to-word-illustration.svg`).
+3a. **Files-added layout** (node `49025-3914`): compact dropzone strip stays
+   on top ("Drop more files here"), file rows with green status captions
+   below, "N files analyzed successfully" + Convert row at the bottom.
 4. **Drag & drop:** violet tint + violet dashes on the dropzone; full-screen
    gray overlay with white dashed frame + illustration (mode doc §4).
 5. **Trust trio:** dashed-square icon tiles ("Privacy-focused / Easy to use /
@@ -114,8 +126,9 @@ From Figma node `50648-16354` and `docs/modes/pdfguru.md`:
 
 ## Assumptions made (and why)
 
-1. **Single-file flow** (UPDF allows 5): PDFGuru's design language is
-   one-decision-per-screen funnels; the state matrix is per-file anyway.
+1. **Multi-file queue, up to 5 files** (matching the functional reference
+   and Figma node 49025-3914): per-file validation/password/error states
+   live on the rows; upload/conversion run as one batch.
 2. **PDF-only, 10 MB limit** — functional parity with the reference,
    framed as the free plan.
 3. **Simulated backend** (timers + filename triggers) — the task validates
@@ -171,18 +184,18 @@ apps/demo/src/pages/pdf-to-word/
 │   ├── FaqSection.tsx           # accordions
 │   └── StateInspector.tsx       # demo-only state jumper (freeze toggle)
 └── upload/
-    ├── conversionMachine.ts     # pure reducer: 14-state machine + validation
+    ├── conversionMachine.ts     # pure reducer: row statuses + batch phases
     ├── useConversionFlow.ts     # timer-driven simulation hook
-    ├── UploadWidget.tsx         # funnel card, file input, window drag & drop
+    ├── UploadWidget.tsx         # gather screen + batch panels, input, drag & drop
     └── panels/
-        ├── DropzonePanel.tsx    # default/empty + drag-active surface
+        ├── DropzonePanel.tsx    # default/empty/compact + drag-active surface
         ├── DragOverlay.tsx      # full-screen drop overlay
-        ├── FileCard.tsx         # file row + format badges
-        ├── SelectedPanel.tsx    # ready-to-convert decision
-        ├── PasswordPanel.tsx    # unlock form
-        ├── ProgressPanel.tsx    # analyzing/uploading/converting
-        ├── ResultPanel.tsx      # success + download-ready
-        └── ErrorPanel.tsx       # all four error reasons
+        ├── FileCard.tsx         # file row + format badges (batch panels)
+        ├── FilesList.tsx        # queued rows: status captions + inline unlock
+        ├── ProgressPanel.tsx    # batch uploading/converting
+        ├── ResultPanel.tsx      # success + download-ready (per-file downloads)
+        └── ErrorPanel.tsx       # batch server error
 
-apps/demo/public/demo/pdf-guru-sample.docx   # valid demo conversion output
+apps/demo/public/demo/pdf-guru-sample.docx          # valid demo conversion output
+apps/demo/public/demo/pdf-to-word-illustration.svg  # hero illustration (Figma 3663-4724)
 ```

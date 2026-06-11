@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import {
+  batchIsSlow,
+  batchWillFail,
   flowReducer,
   INITIAL_FLOW_STATE,
-  isSlowConversion,
-  willFailOnServer,
+  oldestAnalyzing,
   type FlowAction,
   type FlowState,
 } from './conversionMachine';
@@ -14,25 +15,33 @@ export interface ConversionFlow {
 }
 
 /**
- * Drives the transient phases of the conversion machine with timers,
- * simulating a backend: analysis → upload progress → conversion progress →
- * success → download-ready. Pausing (state inspector) freezes the timers.
+ * Drives the transient parts of the conversion machine with timers,
+ * simulating a backend: per-row analysis while gathering, then batch upload
+ * progress → conversion progress → success → download-ready. Pausing (state
+ * inspector) freezes the timers.
  */
 export function useConversionFlow(): ConversionFlow {
   const [state, dispatch] = useReducer(flowReducer, INITIAL_FLOW_STATE);
-  const { phase, paused } = state;
+  const { phase, files, paused } = state;
 
   useEffect(() => {
     if (paused) return undefined;
 
-    const slowdown =
-      'file' in phase && phase.file && isSlowConversion(phase.file) ? 3 : 1;
+    const slowdown = batchIsSlow(files) ? 3 : 1;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     switch (phase.kind) {
-      case 'analyzing':
-        timer = setTimeout(() => dispatch({ type: 'ANALYSIS_DONE' }), 900 * slowdown);
+      case 'gather': {
+        // Rows are analyzed one by one, oldest first.
+        const pending = oldestAnalyzing(files);
+        if (pending) {
+          timer = setTimeout(
+            () => dispatch({ type: 'ROW_ANALYZED', id: pending.id }),
+            700 * slowdown,
+          );
+        }
         break;
+      }
 
       case 'uploading':
         timer = setTimeout(
@@ -42,8 +51,8 @@ export function useConversionFlow(): ConversionFlow {
         break;
 
       case 'converting':
-        if (willFailOnServer(phase.file) && phase.progress >= 62) {
-          timer = setTimeout(() => dispatch({ type: 'FAILED', reason: 'server-error' }), 350);
+        if (batchWillFail(files) && phase.progress >= 62) {
+          timer = setTimeout(() => dispatch({ type: 'FAILED' }), 350);
         } else {
           timer = setTimeout(
             () => dispatch({ type: 'PROGRESS_TICKED', delta: 2.5 + Math.random() * 5 }),
@@ -63,7 +72,7 @@ export function useConversionFlow(): ConversionFlow {
     return () => {
       if (timer) clearTimeout(timer);
     };
-  }, [phase, paused]);
+  }, [phase, files, paused]);
 
   return useMemo(() => ({ state, dispatch }), [state]);
 }

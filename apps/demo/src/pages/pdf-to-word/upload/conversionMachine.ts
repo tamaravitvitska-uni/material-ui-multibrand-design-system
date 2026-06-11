@@ -1,10 +1,12 @@
 /**
  * Conversion flow state machine (pure — no timers, no React).
  *
- * The widget renders one panel per phase; useConversionFlow drives the
- * transient phases (analyzing/uploading/converting/success) with timers.
- * Filename triggers simulate backend outcomes so every state is reachable
- * with any small real file — see FILENAME_TRIGGERS in demoData.ts.
+ * Multi-file model per the PDFGuru A/B layout (Figma node 49025-3914): the
+ * dropzone stays visible while files queue up below it; per-file states
+ * (analyzing / ready / password / error) live on the rows, batch states
+ * (uploading / converting / success / download-ready / server-error) on the
+ * phase. Filename triggers simulate backend outcomes — see FILENAME_TRIGGERS
+ * in demoData.ts.
  */
 import { DEMO_PASSWORD, FILENAME_TRIGGERS, LIMITS } from '../demoData';
 
@@ -14,26 +16,31 @@ export interface DemoFile {
   pages: number;
 }
 
-export type ErrorReason =
-  | 'unsupported-format'
-  | 'file-too-large'
-  | 'corrupted-file'
-  | 'server-error';
+export type RowErrorReason = 'unsupported-format' | 'file-too-large' | 'corrupted-file';
 
-export type UploadPhase =
-  | { kind: 'idle' }
-  | { kind: 'empty' }
-  | { kind: 'analyzing'; file: DemoFile }
-  | { kind: 'selected'; file: DemoFile }
-  | { kind: 'password'; file: DemoFile; failedAttempt: boolean }
-  | { kind: 'uploading'; file: DemoFile; progress: number }
-  | { kind: 'converting'; file: DemoFile; progress: number }
-  | { kind: 'success'; file: DemoFile }
-  | { kind: 'download-ready'; file: DemoFile }
-  | { kind: 'error'; file: DemoFile | null; reason: ErrorReason };
+export type RowStatus =
+  | { kind: 'analyzing' }
+  | { kind: 'ready' }
+  | { kind: 'password'; failedAttempt: boolean }
+  | { kind: 'row-error'; reason: RowErrorReason };
+
+export interface QueuedFile {
+  id: string;
+  file: DemoFile;
+  status: RowStatus;
+}
+
+export type FlowPhase =
+  | { kind: 'gather'; emptied: boolean } // dropzone + file list (default/empty)
+  | { kind: 'uploading'; progress: number }
+  | { kind: 'converting'; progress: number }
+  | { kind: 'success' }
+  | { kind: 'download-ready' }
+  | { kind: 'server-error' };
 
 export interface FlowState {
-  phase: UploadPhase;
+  phase: FlowPhase;
+  files: QueuedFile[];
   /** A file is being dragged over the window — shows the drop overlay. */
   dragging: boolean;
   /** Freeze transient phases (used by the demo state inspector). */
@@ -42,21 +49,23 @@ export interface FlowState {
 
 export type FlowAction =
   | { type: 'DRAG_CHANGED'; dragging: boolean }
-  | { type: 'FILE_PICKED'; file: DemoFile }
-  | { type: 'ANALYSIS_DONE' }
-  | { type: 'PASSWORD_SUBMITTED'; password: string }
+  | { type: 'FILES_ADDED'; files: DemoFile[] }
+  | { type: 'ROW_ANALYZED'; id: string }
+  | { type: 'PASSWORD_SUBMITTED'; id: string; password: string }
+  | { type: 'ROW_REMOVED'; id: string }
   | { type: 'CONVERT_STARTED' }
   | { type: 'PROGRESS_TICKED'; delta: number }
   | { type: 'RESULT_SHOWN' }
-  | { type: 'FAILED'; reason: ErrorReason }
-  | { type: 'UPLOAD_CANCELLED' }
-  | { type: 'FILE_REMOVED' }
+  | { type: 'FAILED' }
+  | { type: 'RETRY' }
+  | { type: 'BACK_TO_FILES' }
   | { type: 'RESET' }
   | { type: 'PAUSE_TOGGLED' }
-  | { type: 'JUMPED'; phase: UploadPhase };
+  | { type: 'JUMPED'; phase: FlowPhase; files: QueuedFile[]; dragging?: boolean };
 
 export const INITIAL_FLOW_STATE: FlowState = {
-  phase: { kind: 'idle' },
+  phase: { kind: 'gather', emptied: false },
+  files: [],
   dragging: false,
   paused: false,
 };
@@ -86,54 +95,103 @@ export function toDemoFile(file: File): DemoFile {
   };
 }
 
+let rowSeq = 0;
+
 /** Synchronous validation at pick time (extension + size). */
-function validatePicked(file: DemoFile): UploadPhase {
+function queueFile(file: DemoFile): QueuedFile {
+  rowSeq += 1;
+  const id = `row-${rowSeq}`;
   const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
   if (!LIMITS.acceptedExtensions.includes(extension)) {
-    return { kind: 'error', file, reason: 'unsupported-format' };
+    return { id, file, status: { kind: 'row-error', reason: 'unsupported-format' } };
   }
   if (file.sizeBytes > LIMITS.maxSizeBytes) {
-    return { kind: 'error', file, reason: 'file-too-large' };
+    return { id, file, status: { kind: 'row-error', reason: 'file-too-large' } };
   }
-  return { kind: 'analyzing', file };
+  return { id, file, status: { kind: 'analyzing' } };
 }
 
-/** Outcome of the simulated server-side analysis. */
-function resolveAnalysis(file: DemoFile): UploadPhase {
-  if (isCorrupted(file)) return { kind: 'error', file, reason: 'corrupted-file' };
-  if (isPasswordProtected(file)) return { kind: 'password', file, failedAttempt: false };
-  return { kind: 'selected', file };
+/** Outcome of the simulated server-side analysis for one row. */
+function resolveAnalysis(file: DemoFile): RowStatus {
+  if (isCorrupted(file)) return { kind: 'row-error', reason: 'corrupted-file' };
+  if (isPasswordProtected(file)) return { kind: 'password', failedAttempt: false };
+  return { kind: 'ready' };
 }
 
-const fileOf = (phase: UploadPhase): DemoFile | null =>
-  'file' in phase ? phase.file : null;
+// ---- Selectors ----
+
+export const readyFiles = (files: QueuedFile[]) =>
+  files.filter((row) => row.status.kind === 'ready');
+
+export const oldestAnalyzing = (files: QueuedFile[]) =>
+  files.find((row) => row.status.kind === 'analyzing');
+
+/** Convert allowed: at least one ready row, nothing pending or locked. */
+export const canConvert = (files: QueuedFile[]) =>
+  readyFiles(files).length > 0 &&
+  !files.some((row) => row.status.kind === 'analyzing' || row.status.kind === 'password');
+
+export const batchWillFail = (files: QueuedFile[]) =>
+  files.some((row) => willFailOnServer(row.file));
+
+export const batchIsSlow = (files: QueuedFile[]) =>
+  files.some((row) => isSlowConversion(row.file));
 
 export function flowReducer(state: FlowState, action: FlowAction): FlowState {
-  const { phase } = state;
+  const { phase, files } = state;
 
   switch (action.type) {
     case 'DRAG_CHANGED':
       return { ...state, dragging: action.dragging };
 
-    case 'FILE_PICKED':
-      return { ...state, dragging: false, phase: validatePicked(action.file) };
+    case 'FILES_ADDED': {
+      if (phase.kind !== 'gather') return state;
+      const slots = Math.max(0, LIMITS.maxFiles - files.length);
+      const added = action.files.slice(0, slots).map(queueFile);
+      if (!added.length) return { ...state, dragging: false };
+      return {
+        ...state,
+        dragging: false,
+        files: [...files, ...added],
+        phase: { kind: 'gather', emptied: false },
+      };
+    }
 
-    case 'ANALYSIS_DONE':
-      if (phase.kind !== 'analyzing') return state;
-      return { ...state, phase: resolveAnalysis(phase.file) };
+    case 'ROW_ANALYZED':
+      return {
+        ...state,
+        files: files.map((row) =>
+          row.id === action.id && row.status.kind === 'analyzing'
+            ? { ...row, status: resolveAnalysis(row.file) }
+            : row,
+        ),
+      };
 
-    case 'PASSWORD_SUBMITTED': {
-      if (phase.kind !== 'password') return state;
-      const unlocked = action.password === DEMO_PASSWORD;
-      return unlocked
-        ? { ...state, phase: { kind: 'uploading', file: phase.file, progress: 0 } }
-        : { ...state, phase: { ...phase, failedAttempt: true } };
+    case 'PASSWORD_SUBMITTED':
+      return {
+        ...state,
+        files: files.map((row) => {
+          if (row.id !== action.id || row.status.kind !== 'password') return row;
+          return action.password === DEMO_PASSWORD
+            ? { ...row, status: { kind: 'ready' } }
+            : { ...row, status: { kind: 'password', failedAttempt: true } };
+        }),
+      };
+
+    case 'ROW_REMOVED': {
+      if (phase.kind !== 'gather') return state;
+      const remaining = files.filter((row) => row.id !== action.id);
+      return {
+        ...state,
+        files: remaining,
+        phase: { kind: 'gather', emptied: remaining.length === 0 },
+      };
     }
 
     case 'CONVERT_STARTED': {
-      const file = fileOf(phase);
-      if (!file || (phase.kind !== 'selected' && phase.kind !== 'error')) return state;
-      return { ...state, phase: { kind: 'uploading', file, progress: 0 } };
+      if (phase.kind !== 'gather' || !canConvert(files)) return state;
+      // Error rows can't convert — only the ready ones travel on.
+      return { ...state, files: readyFiles(files), phase: { kind: 'uploading', progress: 0 } };
     }
 
     case 'PROGRESS_TICKED': {
@@ -142,32 +200,38 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       if (progress < 100) return { ...state, phase: { ...phase, progress } };
       // Each stage completes into the next one.
       return phase.kind === 'uploading'
-        ? { ...state, phase: { kind: 'converting', file: phase.file, progress: 0 } }
-        : { ...state, phase: { kind: 'success', file: phase.file } };
+        ? { ...state, phase: { kind: 'converting', progress: 0 } }
+        : { ...state, phase: { kind: 'success' } };
     }
 
     case 'RESULT_SHOWN':
       if (phase.kind !== 'success') return state;
-      return { ...state, phase: { kind: 'download-ready', file: phase.file } };
+      return { ...state, phase: { kind: 'download-ready' } };
 
     case 'FAILED':
-      return { ...state, phase: { kind: 'error', file: fileOf(phase), reason: action.reason } };
+      if (phase.kind !== 'uploading' && phase.kind !== 'converting') return state;
+      return { ...state, phase: { kind: 'server-error' } };
 
-    case 'UPLOAD_CANCELLED':
-      if (phase.kind !== 'uploading') return state;
-      return { ...state, phase: { kind: 'selected', file: phase.file } };
+    case 'RETRY':
+      if (phase.kind !== 'server-error') return state;
+      return { ...state, phase: { kind: 'uploading', progress: 0 } };
 
-    case 'FILE_REMOVED':
-      return { ...state, phase: { kind: 'empty' } };
+    case 'BACK_TO_FILES':
+      return { ...state, phase: { kind: 'gather', emptied: false } };
 
     case 'RESET':
-      return { ...state, dragging: false, phase: { kind: 'idle' } };
+      return { ...state, files: [], dragging: false, phase: { kind: 'gather', emptied: false } };
 
     case 'PAUSE_TOGGLED':
       return { ...state, paused: !state.paused };
 
     case 'JUMPED':
-      return { ...state, dragging: false, phase: action.phase };
+      return {
+        ...state,
+        phase: action.phase,
+        files: action.files,
+        dragging: action.dragging ?? false,
+      };
 
     default:
       return state;

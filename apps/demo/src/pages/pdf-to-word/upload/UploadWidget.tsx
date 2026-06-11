@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useRef } from 'react';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded';
+import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded';
 import { useTheme } from '@mui/material/styles';
-import { CONVERTED_ASSET_URL, LIMITS } from '../demoData';
-import { toDemoFile, type DemoFile } from './conversionMachine';
+import { CONVERTED_ASSET_URL, FILE_LIST, LIMITS } from '../demoData';
+import {
+  canConvert,
+  readyFiles,
+  toDemoFile,
+  type DemoFile,
+  type QueuedFile,
+} from './conversionMachine';
 import type { ConversionFlow } from './useConversionFlow';
 import { DragOverlay } from './panels/DragOverlay';
 import { DropzonePanel } from './panels/DropzonePanel';
 import { ErrorPanel } from './panels/ErrorPanel';
-import { PasswordPanel } from './panels/PasswordPanel';
+import { FilesList } from './panels/FilesList';
 import { ProgressPanel } from './panels/ProgressPanel';
 import { ResultPanel, convertedName } from './panels/ResultPanel';
-import { SelectedPanel } from './panels/SelectedPanel';
-
-/** Phases during which a dropped/picked file is ignored. */
-const BUSY_KINDS = new Set(['analyzing', 'uploading', 'converting', 'success']);
 
 async function downloadConvertedFile(file: DemoFile) {
   // The demo "backend" serves a pre-made valid .docx, renamed to the source
@@ -28,42 +35,98 @@ async function downloadConvertedFile(file: DemoFile) {
   URL.revokeObjectURL(url);
 }
 
+async function downloadAll(files: DemoFile[]) {
+  for (const file of files) {
+    // eslint-disable-next-line no-await-in-loop -- sequential so every download lands
+    await downloadConvertedFile(file);
+  }
+}
+
+/** Summary line + Convert CTA under the file list (Figma node 49025-3914). */
+function GatherFooter({
+  files,
+  onConvert,
+}: {
+  files: QueuedFile[];
+  onConvert: () => void;
+}) {
+  const ready = readyFiles(files).length;
+  const analyzing = files.some((row) => row.status.kind === 'analyzing');
+  const locked = files.some((row) => row.status.kind === 'password');
+
+  const summary = analyzing
+    ? { text: FILE_LIST.analyzingSummary, color: 'text.secondary', check: false }
+    : locked
+      ? { text: FILE_LIST.blockedSummary, color: 'text.secondary', check: false }
+      : ready > 0
+        ? { text: FILE_LIST.analyzedSummary(ready), color: 'success.main', check: true }
+        : { text: FILE_LIST.errorsOnlySummary, color: 'error.main', check: false };
+
+  return (
+    <Stack
+      direction={{ xs: 'column', sm: 'row' }}
+      spacing={4}
+      sx={{ alignItems: { xs: 'stretch', sm: 'center' }, justifyContent: 'space-between' }}
+    >
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+        {summary.check && <CheckCircleRounded fontSize="small" color="success" />}
+        <Typography variant="caption" sx={{ fontWeight: 700, color: summary.color }}>
+          {summary.text}
+        </Typography>
+      </Stack>
+      <Button
+        variant="contained"
+        color="primary"
+        size="large"
+        endIcon={<ArrowForwardRounded />}
+        disabled={!canConvert(files)}
+        onClick={onConvert}
+      >
+        {FILE_LIST.convert}
+      </Button>
+    </Stack>
+  );
+}
+
 export interface UploadWidgetProps {
   flow: ConversionFlow;
 }
 
 /**
- * The conversion widget: a single PDFGuru funnel card that renders one panel
- * per machine phase and owns the file input + window-level drag & drop.
+ * The conversion widget. While gathering, the dropzone stays on top with the
+ * queued files listed below it (Figma node 49025-3914); batch phases swap
+ * the card content. Owns the file input + window-level drag & drop.
  */
 export function UploadWidget({ flow }: UploadWidgetProps) {
   const theme = useTheme();
   const { tokens } = theme;
   const { state, dispatch } = flow;
-  const { phase, dragging } = state;
+  const { phase, files, dragging } = state;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
-  const busy = BUSY_KINDS.has(phase.kind);
+  const gathering = phase.kind === 'gather';
+  const atCapacity = files.length >= LIMITS.maxFiles;
 
   const openFileDialog = useCallback(() => {
     inputRef.current?.click();
   }, []);
 
-  const pickFile = useCallback(
-    (file: File) => {
-      dispatch({ type: 'FILE_PICKED', file: toDemoFile(file) });
+  const addFiles = useCallback(
+    (list: FileList | File[]) => {
+      const mapped = Array.from(list).map(toDemoFile);
+      if (mapped.length) dispatch({ type: 'FILES_ADDED', files: mapped });
     },
     [dispatch],
   );
 
-  // Window-level drag & drop: dropping a file anywhere on the page works.
+  // Window-level drag & drop: dropping files anywhere on the page works.
   useEffect(() => {
     const hasFiles = (event: DragEvent) =>
       Array.from(event.dataTransfer?.types ?? []).includes('Files');
 
     const onDragEnter = (event: DragEvent) => {
-      if (!hasFiles(event) || busy) return;
+      if (!hasFiles(event) || !gathering) return;
       event.preventDefault();
       dragDepth.current += 1;
       dispatch({ type: 'DRAG_CHANGED', dragging: true });
@@ -80,8 +143,7 @@ export function UploadWidget({ flow }: UploadWidgetProps) {
       if (!hasFiles(event)) return;
       event.preventDefault();
       dragDepth.current = 0;
-      const file = event.dataTransfer?.files?.[0];
-      if (file && !busy) pickFile(file);
+      if (gathering && event.dataTransfer?.files?.length) addFiles(event.dataTransfer.files);
       else dispatch({ type: 'DRAG_CHANGED', dragging: false });
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -100,68 +162,54 @@ export function UploadWidget({ flow }: UploadWidgetProps) {
       window.removeEventListener('drop', onDrop);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [busy, dispatch, pickFile]);
+  }, [gathering, addFiles, dispatch]);
 
-  const panel = (() => {
-    switch (phase.kind) {
-      case 'idle':
-      case 'empty':
-        return (
-          <DropzonePanel variant={phase.kind} dragActive={dragging} onChooseFile={openFileDialog} />
-        );
-      case 'analyzing':
-        return <ProgressPanel mode="analyzing" file={phase.file} />;
-      case 'selected':
-        return (
-          <SelectedPanel
-            file={phase.file}
-            onConvert={() => dispatch({ type: 'CONVERT_STARTED' })}
-            onRemove={() => dispatch({ type: 'FILE_REMOVED' })}
-          />
-        );
-      case 'password':
-        return (
-          <PasswordPanel
-            file={phase.file}
-            failedAttempt={phase.failedAttempt}
-            onSubmit={(password) => dispatch({ type: 'PASSWORD_SUBMITTED', password })}
-            onUseAnotherFile={() => dispatch({ type: 'FILE_REMOVED' })}
-          />
-        );
-      case 'uploading':
-        return (
-          <ProgressPanel
-            mode="uploading"
-            file={phase.file}
-            progress={phase.progress}
-            onCancel={() => dispatch({ type: 'UPLOAD_CANCELLED' })}
-          />
-        );
-      case 'converting':
-        return <ProgressPanel mode="converting" file={phase.file} progress={phase.progress} />;
-      case 'success':
-      case 'download-ready':
-        return (
-          <ResultPanel
-            mode={phase.kind}
-            file={phase.file}
-            onDownload={() => void downloadConvertedFile(phase.file)}
-            onConvertAnother={() => dispatch({ type: 'RESET' })}
-          />
-        );
-      case 'error':
-        return (
-          <ErrorPanel
-            reason={phase.reason}
-            file={phase.file}
-            onRetry={() => dispatch({ type: 'CONVERT_STARTED' })}
-            onChooseAnother={openFileDialog}
-          />
-        );
-      default:
-        return null;
-    }
-  })();
+  const batchFiles = files.map((row) => row.file);
+
+  const body =
+    phase.kind === 'gather' ? (
+      <Stack spacing={5} sx={{ width: '100%' }}>
+        <DropzonePanel
+          variant={files.length ? 'compact' : phase.emptied ? 'empty' : 'default'}
+          dragActive={dragging}
+          atCapacity={atCapacity}
+          onChooseFile={openFileDialog}
+        />
+        {files.length > 0 && (
+          <>
+            <FilesList
+              files={files}
+              onRemove={(id) => dispatch({ type: 'ROW_REMOVED', id })}
+              onUnlock={(id, password) => dispatch({ type: 'PASSWORD_SUBMITTED', id, password })}
+            />
+            <GatherFooter files={files} onConvert={() => dispatch({ type: 'CONVERT_STARTED' })} />
+          </>
+        )}
+      </Stack>
+    ) : phase.kind === 'uploading' || phase.kind === 'converting' ? (
+      <ProgressPanel
+        mode={phase.kind}
+        files={batchFiles}
+        progress={phase.progress}
+        onCancel={
+          phase.kind === 'uploading' ? () => dispatch({ type: 'BACK_TO_FILES' }) : undefined
+        }
+      />
+    ) : phase.kind === 'success' || phase.kind === 'download-ready' ? (
+      <ResultPanel
+        mode={phase.kind}
+        files={batchFiles}
+        onDownload={(file) => void downloadConvertedFile(file)}
+        onDownloadAll={() => void downloadAll(batchFiles)}
+        onConvertAnother={() => dispatch({ type: 'RESET' })}
+      />
+    ) : (
+      <ErrorPanel
+        files={batchFiles}
+        onRetry={() => dispatch({ type: 'RETRY' })}
+        onBackToFiles={() => dispatch({ type: 'BACK_TO_FILES' })}
+      />
+    );
 
   return (
     <Box
@@ -175,27 +223,27 @@ export function UploadWidget({ flow }: UploadWidgetProps) {
     >
       <Box
         sx={{
-          // Fixed-ish height keeps the funnel card stable while panels swap.
-          minHeight: { xs: 320, md: 360 },
+          // Stable card height while panels swap; the gather list grows freely.
+          minHeight: gathering && files.length ? 0 : { xs: 320, md: 360 },
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           '& > *': { width: '100%' },
         }}
       >
-        {panel}
+        {body}
       </Box>
 
       <input
         ref={inputRef}
         type="file"
         accept={LIMITS.acceptAttribute}
+        multiple
         hidden
         aria-hidden
         tabIndex={-1}
         onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) pickFile(file);
+          if (event.target.files?.length) addFiles(event.target.files);
           event.target.value = '';
         }}
       />
