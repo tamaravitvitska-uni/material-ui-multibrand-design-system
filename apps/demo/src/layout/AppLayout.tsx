@@ -13,6 +13,8 @@ const NAV = [
   { label: 'Components', path: '/components' },
   { label: 'Pricing demo', path: '/pricing' },
   { label: 'Tokens', path: '/tokens' },
+  // Standalone page — renders outside this layout with its own chrome.
+  { label: 'PDF→Word (PDFGuru)', path: '/pdf-to-word' },
 ];
 
 export function AppLayout() {
